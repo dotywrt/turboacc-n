@@ -1,5 +1,7 @@
 # luci-app-turboacc
 
+简体中文 | [English](./README.en.md)
+
 一个适用于官方Official OpenWrt(24.10/25.12/snapshot) firewall3/firewall4的turboacc
 包括以下功能：快速转发引擎、全锥形 NAT1、TCP 拥塞控制算法
 支持内核版本：6.6、6.12、6.18
