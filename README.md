@@ -34,6 +34,7 @@ make menuconfig
 2. **`firewall4`(nftables) 环境下请使用 `Flow Offloading`**：`Shortcut-FE` 和 `Fast Classifier` 依赖 iptables 时代的 conntrack chain events 接口，与 nftables 不兼容。OpenWrt 23.05+ 默认使用 `firewall4`/nftables，在此环境下选择 SFE 类方案会存在兼容性风险。
 3. **仅在 `firewall3`(iptables) 环境下可选 `Fast Classifier` 或 `Shortcut-FE`**：如果你的固件使用的是 `firewall3`/iptables，可以根据需要选择 `Fast Classifier` 或 `Shortcut-FE CM` 作为加速引擎。
 4. 因OpenWrt现在使用`firewall4`作为默认防火墙，如果切换为`firewall3`的话，请把所有与nft相关的包手动取消掉，并替换为相应的ipt包(例如: `iptables-nft`替换为`iptables-zz-legacy`)。
+5. **`firewall4`(nftables) 环境下全锥形 NAT1 请选择 `兼容` 模式**：lede 上游并未为 nftables 实现 `高性能 Broadcom` 全锥形 NAT，因此在 `firewall4`/nftables 环境下选择该选项后，重启路由会导致快速转发引擎和全锥形 NAT1 均显示禁用且无法上网。`firewall4` 用户请使用 `兼容` 全锥形 NAT1；`高性能 Broadcom` 仅在 `firewall3`/iptables 环境下可用。参见 [#11](https://github.com/mufeng05/turboacc/issues/11)。
 
 ## 插件预览
 

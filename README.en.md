@@ -40,6 +40,7 @@ Currently it has only been verified against the 2025-11-20 x86 snapshot of OpenW
 2. **Use `Flow Offloading` on `firewall4` (nftables).** `Shortcut-FE` and `Fast Classifier` depend on the iptables-era conntrack chain events interface and are not compatible with nftables. OpenWrt 23.05+ defaults to `firewall4` / nftables, so picking an SFE-style engine in that environment is risky.
 3. **Only pick `Fast Classifier` or `Shortcut-FE` on `firewall3` (iptables).** If your firmware still uses `firewall3` / iptables, you can choose `Fast Classifier` or `Shortcut-FE CM` as the acceleration engine.
 4. Because OpenWrt now uses `firewall4` as the default firewall, if you switch back to `firewall3` you must manually deselect every nft-related package and replace it with the corresponding ipt package (for example, replace `iptables-nft` with `iptables-zz-legacy`).
+5. **On `firewall4` (nftables), pick the `Compatible` fullcone NAT1 mode.** Upstream lede does not implement the `High-performance Broadcom` fullcone NAT for nftables. If you select that option on `firewall4` / nftables, both the fast forwarding engine and fullcone NAT1 will show as disabled after a reboot and you will lose Internet connectivity. `firewall4` users should choose the `Compatible` fullcone NAT1; the `High-performance Broadcom` option only works on `firewall3` / iptables. See [#11](https://github.com/mufeng05/turboacc/issues/11).
 
 ## Preview
 
