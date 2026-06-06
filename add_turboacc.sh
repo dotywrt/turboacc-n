@@ -1,171 +1,155 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
 
-trap 'rm -rf "$TMPDIR"' EXIT
-TMPDIR=$(mktemp -d) || exit 1
+set -e
 
-if ! [ -d "./package" ]; then
+trap 'rm -rf "$TMPDIR"' EXIT
+TMPDIR="$(mktemp -d)" || exit 1
+
+[ -d "./package" ] || {
     echo "./package not found"
     exit 1
-fi
-
-kernel_versions="$(find "./include" | sed -n '/kernel-[0-9]/p' | sed -e "s@./include/kernel-@@" | sed ':a;N;$!ba;s/\n/ /g')"
-if [ -z "$kernel_versions" ]; then
-    kernel_versions="$(find "./target/linux/generic" | sed -n '/kernel-[0-9]/p' | sed -e "s@./target/linux/generic/kernel-@@" | sed ':a;N;$!ba;s/\n/ /g')"
-fi
-if [ -z "$kernel_versions" ]; then
-    echo "Error: Unable to get kernel version, script exited"
-    exit 1
-fi
-echo "kernel version: $kernel_versions"
-
-kernel_full_versions=""
-for kv in $kernel_versions; do
-    kernel_file=""
-    if [ -f "./include/kernel-$kv" ]; then
-        kernel_file="./include/kernel-$kv"
-    elif [ -f "./target/linux/generic/kernel-$kv" ]; then
-        kernel_file="./target/linux/generic/kernel-$kv"
-    fi
-    full_ver="$kv"
-    if [ -n "$kernel_file" ]; then
-        patch_ver=$(sed -n "s/^LINUX_VERSION-${kv} *= *//p" "$kernel_file" | tr -d '[:space:]')
-        if [ -n "$patch_ver" ]; then
-            full_ver="${kv}${patch_ver}"
-        fi
-    fi
-    kernel_full_versions="${kernel_full_versions:+$kernel_full_versions }$full_ver"
-done
-echo "kernel full version: $kernel_full_versions"
-
-# Find the best matching patch directory based on version threshold.
-# For directories hack-6.12, hack-6.12.78, hack-6.12.85 and kernel 6.12.80:
-#   hack-6.12    (6.12.0)  <= 6.12.80 ✓
-#   hack-6.12.78           <= 6.12.80 ✓  ← highest match, use this
-#   hack-6.12.85           >  6.12.80 ✗
-find_best_patch_dir() {
-    local base_path="$1"
-    local kv="$2"    # major.minor, e.g. 6.12
-    local kfv="$3"   # full version, e.g. 6.12.80
-
-    local best_dir=""
-    local best_ver=""
-
-    for dir in "$base_path"/hack-"${kv}" "$base_path"/hack-"${kv}".*; do
-        [ -d "$dir" ] || continue
-        local dv
-        dv="$(basename "$dir")"
-        dv="${dv#hack-}"
-
-        # Normalize: "6.12" → "6.12.0" for comparison
-        local cmp_ver="$dv"
-        case "$dv" in *.*.*) ;; *) cmp_ver="${dv}.0" ;; esac
-
-        # Skip if dir version > actual kernel version
-        local smaller
-        smaller="$(printf '%s\n%s' "$cmp_ver" "$kfv" | sort -V | head -n1)"
-        [ "$smaller" = "$cmp_ver" ] || continue
-
-        # Keep the highest match
-        if [ -z "$best_ver" ]; then
-            best_dir="$dir"
-            best_ver="$cmp_ver"
-        else
-            local higher
-            higher="$(printf '%s\n%s' "$best_ver" "$cmp_ver" | sort -V | tail -n1)"
-            if [ "$higher" = "$cmp_ver" ]; then
-                best_dir="$dir"
-                best_ver="$cmp_ver"
-            fi
-        fi
-    done
-
-    echo "$best_dir"
 }
 
-git clone --depth=1 --single-branch https://github.com/mufeng05/turboacc "$TMPDIR/turboacc" || exit 1
+kernel_versions="$(find "./include" 2>/dev/null | sed -n '/kernel-[0-9]/p' | sed -e 's@./include/kernel-@@' | sed ':a;N;$!ba;s/\n/ /g')"
 
-mkdir -p "./package/turboacc"
-mkdir -p "./package/network/config/firewall/patches"
-mkdir -p "./package/network/config/firewall4/patches"
-mkdir -p "./package/network/utils/iptables/patches"
-mkdir -p "./package/network/utils/nftables/patches"
-mkdir -p "./package/libs/libnftnl/patches"
+if [ -z "$kernel_versions" ]; then
+    kernel_versions="$(find "./target/linux/generic" 2>/dev/null | sed -n '/kernel-[0-9]/p' | sed -e 's@./target/linux/generic/kernel-@@' | sed ':a;N;$!ba;s/\n/ /g')"
+fi
 
-echo "Copying lede turboacc files..."
+[ -n "$kernel_versions" ] || {
+    echo "Error: Unable to get kernel version"
+    exit 1
+}
 
-for kernel_version in $kernel_versions; do
-    if [ "$kernel_version" = "6.18" ] || [ "$kernel_version" = "6.12" ] || [ "$kernel_version" = "6.6" ]; then
-        cp -f "$TMPDIR/turboacc/lede/hack-$kernel_version/952-add-net-conntrack-events-support-multiple-registrant.patch" "./target/linux/generic/hack-$kernel_version"
-        cp -f "$TMPDIR/turboacc/lede/hack-$kernel_version/953-net-patch-linux-kernel-to-support-shortcut-fe.patch" "./target/linux/generic/hack-$kernel_version"
-        cp -f "$TMPDIR/turboacc/lede/hack-$kernel_version/982-add-bcm-fullconenat-support.patch" "./target/linux/generic/hack-$kernel_version"
+echo "kernel version: $kernel_versions"
 
-        if [ -f "$TMPDIR/turboacc/lede/hack-$kernel_version/983-add-bcm-fullconenat-to-nft.patch" ]; then
-            cp -f "$TMPDIR/turboacc/lede/hack-$kernel_version/983-add-bcm-fullconenat-to-nft.patch" "./target/linux/generic/hack-$kernel_version"
-        fi
+git clone --depth=1 --single-branch https://github.com/dotywrt/turboacc-n "$TMPDIR/turboacc"
 
-        if [ -f "$TMPDIR/turboacc/lede/pending-$kernel_version/613-netfilter_optional_tcp_window_check.patch" ]; then
-            cp -f "$TMPDIR/turboacc/lede/pending-$kernel_version/613-netfilter_optional_tcp_window_check.patch" "./target/linux/generic/pending-$kernel_version"
-        fi
+echo "Cleaning old SFE / TurboACC files..."
 
-        if ! grep -q "CONFIG_SHORTCUT_FE" "./target/linux/generic/config-$kernel_version"; then
-            echo "# CONFIG_SHORTCUT_FE is not set" >> "./target/linux/generic/config-$kernel_version"
-        fi
-    else
-        echo "Unsupported kernel version: $kernel_version"
-        exit 1
+rm -rf ./package/turboacc/shortcut-fe
+rm -rf ./package/kernel/shortcut-fe
+rm -rf ./package/shortcut-fe
+
+find ./target/linux/generic -type f \( \
+    -name "*shortcut-fe*.patch" -o \
+    -name "*sfe*.patch" -o \
+    -name "*fast-classifier*.patch" \
+\) -delete 2>/dev/null || true
+
+find ./target/linux/generic -type f -name "953-net-patch-linux-kernel-to-support-shortcut-fe.patch" -delete 2>/dev/null || true
+
+for kv in $kernel_versions; do
+    cfg="./target/linux/generic/config-$kv"
+    if [ -f "$cfg" ]; then
+        sed -i '/CONFIG_SHORTCUT_FE/d' "$cfg"
+        sed -i '/CONFIG_FAST_CLASSIFIER/d' "$cfg"
+        sed -i '/CONFIG_NF_FLOW_TABLE_HW/d' "$cfg"
     fi
 done
 
-cp -rf "$TMPDIR/turboacc/lede/luci-app-turboacc" "./package/turboacc"
-cp -rf "$TMPDIR/turboacc/lede/fullconenat" "./package/turboacc"
-cp -rf "$TMPDIR/turboacc/lede/fullconenat-nft" "./package/turboacc"
-cp -rf "$TMPDIR/turboacc/lede/shortcut-fe" "./package/turboacc"
+mkdir -p ./package/turboacc
+mkdir -p ./package/network/config/firewall/patches
+mkdir -p ./package/network/config/firewall4/patches
+mkdir -p ./package/network/utils/iptables/patches
+mkdir -p ./package/network/utils/nftables/patches
+mkdir -p ./package/libs/libnftnl/patches
 
-cp -rf "$TMPDIR/turboacc/lede/patches/firewall/patches/"* "./package/network/config/firewall/patches/"
-cp -rf "$TMPDIR/turboacc/lede/patches/firewall4/patches/"* "./package/network/config/firewall4/patches/"
-cp -rf "$TMPDIR/turboacc/lede/patches/iptables/patches/"* "./package/network/utils/iptables/patches/"
-cp -rf "$TMPDIR/turboacc/lede/patches/nftables/patches/"* "./package/network/utils/nftables/patches/"
-cp -rf "$TMPDIR/turboacc/lede/patches/libnftnl/patches/"* "./package/libs/libnftnl/patches/"
+echo "Copying TurboACC without SFE..."
 
-echo "Applying custom patches..."
+cp -rf "$TMPDIR/turboacc/lede/luci-app-turboacc" ./package/turboacc/
+cp -rf "$TMPDIR/turboacc/lede/fullconenat" ./package/turboacc/
+cp -rf "$TMPDIR/turboacc/lede/fullconenat-nft" ./package/turboacc/
 
-mkdir -p "./package/turboacc/luci-app-turboacc/root/usr/share/rpcd/ucode"
-mkdir -p "./package/turboacc/luci-app-turboacc/root/usr/share/ucitrack"
-mkdir -p "./package/turboacc/shortcut-fe/fast-classifier/patches"
+# Do NOT copy shortcut-fe
+# cp -rf "$TMPDIR/turboacc/lede/shortcut-fe" ./package/turboacc/
 
-kv_array=($kernel_versions)
-kfv_array=($kernel_full_versions)
+echo "Copying safe patches..."
 
-for i in "${!kv_array[@]}"; do
-    kernel_version="${kv_array[$i]}"
-    kernel_full_ver="${kfv_array[$i]}"
+cp -rf "$TMPDIR/turboacc/lede/patches/firewall/patches/"* ./package/network/config/firewall/patches/ 2>/dev/null || true
+cp -rf "$TMPDIR/turboacc/lede/patches/firewall4/patches/"* ./package/network/config/firewall4/patches/ 2>/dev/null || true
+cp -rf "$TMPDIR/turboacc/lede/patches/iptables/patches/"* ./package/network/utils/iptables/patches/ 2>/dev/null || true
+cp -rf "$TMPDIR/turboacc/lede/patches/nftables/patches/"* ./package/network/utils/nftables/patches/ 2>/dev/null || true
+cp -rf "$TMPDIR/turboacc/lede/patches/libnftnl/patches/"* ./package/libs/libnftnl/patches/ 2>/dev/null || true
 
-    patch_dir=$(find_best_patch_dir "$TMPDIR/turboacc/custom" "$kernel_version" "$kernel_full_ver")
-    if [ -n "$patch_dir" ]; then
-        echo "kernel $kernel_full_ver: using patches from $(basename "$patch_dir")"
-        cp -f "$patch_dir"/*.patch "./target/linux/generic/hack-$kernel_version/"
-    else
-        echo "Warning: no matching custom patches found for kernel $kernel_full_ver"
-    fi
+echo "Copying kernel fullcone patches only..."
+
+for kv in $kernel_versions; do
+    case "$kv" in
+        6.6|6.12|6.18)
+            mkdir -p "./target/linux/generic/hack-$kv"
+            mkdir -p "./target/linux/generic/pending-$kv"
+
+            # Keep conntrack multi registrant
+            cp -f "$TMPDIR/turboacc/lede/hack-$kv/952-add-net-conntrack-events-support-multiple-registrant.patch" \
+                "./target/linux/generic/hack-$kv/" 2>/dev/null || true
+
+            # Skip SFE patch
+            # 953-net-patch-linux-kernel-to-support-shortcut-fe.patch
+
+            # Keep fullcone only
+            cp -f "$TMPDIR/turboacc/lede/hack-$kv/982-add-bcm-fullconenat-support.patch" \
+                "./target/linux/generic/hack-$kv/" 2>/dev/null || true
+
+            cp -f "$TMPDIR/turboacc/lede/hack-$kv/983-add-bcm-fullconenat-to-nft.patch" \
+                "./target/linux/generic/hack-$kv/" 2>/dev/null || true
+
+            # Optional TCP window check, usually safe
+            cp -f "$TMPDIR/turboacc/lede/pending-$kv/613-netfilter_optional_tcp_window_check.patch" \
+                "./target/linux/generic/pending-$kv/" 2>/dev/null || true
+            ;;
+        *)
+            echo "Unsupported kernel version: $kv"
+            exit 1
+            ;;
+    esac
 done
 
-cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/Makefile" "./package/turboacc/luci-app-turboacc/"
-cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/etc/uci-defaults/turboacc" "./package/turboacc/luci-app-turboacc/root/etc/uci-defaults/"
-cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/usr/share/rpcd/ucode/luci.turboacc" "./package/turboacc/luci-app-turboacc/root/usr/share/rpcd/ucode/"
-cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/usr/share/ucitrack/luci-app-turboacc.json" "./package/turboacc/luci-app-turboacc/root/usr/share/ucitrack/"
-cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js" "./package/turboacc/luci-app-turboacc/htdocs/luci-static/resources/view/"
-rm -rf "./package/turboacc/luci-app-turboacc/root/usr/libexec"
-cp -f "$TMPDIR/turboacc/custom/fullconenat/Makefile" "./package/turboacc/fullconenat/"
-cp -f "$TMPDIR/turboacc/custom/fullconenat-nft/Makefile" "./package/turboacc/fullconenat-nft/"
+echo "Applying custom TurboACC files..."
 
-cp -f "$TMPDIR/turboacc/custom/patches/iptables/patches/900-bcm-fullconenat.patch" "./package/network/utils/iptables/patches/"
-cp -f "$TMPDIR/turboacc/custom/shortcut-fe/fast-classifier/patches/001-fix-build.patch" "./package/turboacc/shortcut-fe/fast-classifier/patches/"
+mkdir -p ./package/turboacc/luci-app-turboacc/root/etc/uci-defaults
+mkdir -p ./package/turboacc/luci-app-turboacc/root/usr/share/rpcd/ucode
+mkdir -p ./package/turboacc/luci-app-turboacc/root/usr/share/ucitrack
+
+cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/Makefile" \
+    ./package/turboacc/luci-app-turboacc/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/etc/uci-defaults/turboacc" \
+    ./package/turboacc/luci-app-turboacc/root/etc/uci-defaults/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/usr/share/rpcd/ucode/luci.turboacc" \
+    ./package/turboacc/luci-app-turboacc/root/usr/share/rpcd/ucode/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/root/usr/share/ucitrack/luci-app-turboacc.json" \
+    ./package/turboacc/luci-app-turboacc/root/usr/share/ucitrack/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js" \
+    ./package/turboacc/luci-app-turboacc/htdocs/luci-static/resources/view/ 2>/dev/null || true
+
+rm -rf ./package/turboacc/luci-app-turboacc/root/usr/libexec
+
+cp -f "$TMPDIR/turboacc/custom/fullconenat/Makefile" \
+    ./package/turboacc/fullconenat/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/fullconenat-nft/Makefile" \
+    ./package/turboacc/fullconenat-nft/ 2>/dev/null || true
+
+cp -f "$TMPDIR/turboacc/custom/patches/iptables/patches/900-bcm-fullconenat.patch" \
+    ./package/network/utils/iptables/patches/ 2>/dev/null || true
+
+echo "Removing any remaining SFE references..."
+
+find ./package/turboacc -type f -exec sed -i \
+    -e '/shortcut-fe/d' \
+    -e '/SHORTCUT_FE/d' \
+    -e '/fast-classifier/d' \
+    -e '/FAST_CLASSIFIER/d' {} + 2>/dev/null || true
+
+rm -rf ./package/turboacc/shortcut-fe
 
 echo ""
-echo "Finish"
+echo "Finish: TurboACC installed without SFE / shortcut-fe."
+echo "NSS should no longer be disturbed by SFE patches."
 echo ""
-echo "Tip: 如果只需要全锥形 NAT (Full Cone NAT) 而不需要 turboacc 的其他功能，"
-echo "     可以使用独立项目 openwrt-sonic-fullcone："
-echo "     https://github.com/mufeng05/openwrt-sonic-fullcone"
 exit 0
